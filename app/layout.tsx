@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider publishableKey={process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "pk_test_dGVzdC5jbGVyay5hY2NvdW50cy5kZXYk"}>
+    <ClerkProvider>
       <html lang="en">
         {/* ... keep your head tags the same ... */}
         <body className="min-h-screen bg-[#05050A] font-sans text-white antialiased">
