@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { Suspense, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation"; // 🟢 Added for redirecting to public link
@@ -22,10 +22,7 @@ import {
 } from "lucide-react";
 import { TEMPLATES } from "@/lib/templates";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder"
-);
+// Using shared supabase client from @/lib/supabase
 
 function PortfolioPreviewContent() {
   const { user } = useUser();
@@ -42,6 +39,7 @@ function PortfolioPreviewContent() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [overrides, setOverrides] = useState<any>({});
   const [isPaid, setIsPaid] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -55,26 +53,36 @@ function PortfolioPreviewContent() {
   useEffect(() => {
     const fetchData = async () => {
       if (!user?.id) return;
-      // 🟢 Updated query to include 'slug' column
-      const { data: resumes } = await supabase
-        .from("resumes")
-        .select("id, parsed_json, file_url, slug, template_id, is_paid")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1);
+      
+      try {
+        // 🟢 Updated query to include 'slug' column
+        const { data: resumes, error: fetchError } = await supabase
+          .from("resumes")
+          .select("id, parsed_json, file_url, slug, template_id, is_paid")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1);
 
-      if (resumes && resumes.length > 0) {
-        console.log("✅ Portfolio Data Found:", resumes[0]);
-        setData(resumes[0].parsed_json);
-        setFileUrl(resumes[0].file_url);
-        setResumeId(resumes[0].id);
-        setUserSlug(resumes[0].slug); // 🟢 Store slug locally
-        if (resumes[0].template_id) setCurrentTemplateId(resumes[0].template_id);
-        setIsPaid(resumes[0].is_paid || false);
-      } else {
-        console.warn("❌ No resumes found for user:", user.id);
+        if (fetchError) throw fetchError;
+
+        if (resumes && resumes.length > 0) {
+          console.log("✅ Portfolio Data Found:", resumes[0]);
+          setData(resumes[0].parsed_json);
+          setFileUrl(resumes[0].file_url);
+          setResumeId(resumes[0].id);
+          setUserSlug(resumes[0].slug); // 🟢 Store slug locally
+          if (resumes[0].template_id) setCurrentTemplateId(resumes[0].template_id);
+          setIsPaid(resumes[0].is_paid || false);
+        } else {
+          console.warn("❌ No resumes found for user:", user.id);
+          setErrorMsg("No portfolio data found. Please create one first.");
+        }
+      } catch (err) {
+        console.error("Fetch error:", err);
+        setErrorMsg("Failed to load portfolio data. Please try again.");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
     fetchData();
   }, [user?.id]);
@@ -217,6 +225,7 @@ function PortfolioPreviewContent() {
   };
 
   if (loading) return <div className="min-h-screen bg-black flex items-center justify-center"><Loader2 className="animate-spin text-indigo-500" size={48} /></div>;
+  if (errorMsg) return <div className="min-h-screen bg-black text-red-400 flex flex-col items-center justify-center gap-4"><X size={48} className="text-red-500" /><p>{errorMsg}</p><button onClick={() => window.location.reload()} className="px-4 py-2 border border-red-500/50 rounded-lg hover:bg-red-500/10 transition">Try Again</button></div>;
   if (!data) return <div className="min-h-screen bg-black text-white flex items-center justify-center">No resume data found.</div>;
 
   // 🟢 DYNAMIC TEMPLATE RENDERING
