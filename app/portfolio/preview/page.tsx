@@ -4,36 +4,26 @@ import { Suspense, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation"; // 🟢 Added for redirecting to public link
+import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Download,
-  Share2,
   Check,
-  ArrowLeft,
   SlidersHorizontal,
   Rocket,
   Loader2,
   X,
-  ArrowRight,
   Layout,
-  CreditCard,
   Lock
 } from "lucide-react";
 import { TEMPLATES } from "@/lib/templates";
 
-// Using shared supabase client from @/lib/supabase
-
 function PortfolioPreviewContent() {
   const { user } = useUser();
-  const router = useRouter(); // 🟢 Initialize router
   const [data, setData] = useState<any>(null);
-  const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [resumeId, setResumeId] = useState<string | null>(null);
-  const [userSlug, setUserSlug] = useState<string | null>(null); // 🟢 State to track the URL slug
+  const [userSlug, setUserSlug] = useState<string | null>(null);
   const [currentTemplateId, setCurrentTemplateId] = useState<string>("default");
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -45,8 +35,9 @@ function PortfolioPreviewContent() {
   useEffect(() => {
     if (searchParams.get("success")) {
       alert("Payment Successful! You can now deploy your portfolio.");
-      // Optional: Clean URL
-      window.history.replaceState(null, "", "/portfolio/preview");
+      if (typeof window !== "undefined") {
+        window.history.replaceState(null, "", "/portfolio/preview");
+      }
     }
   }, [searchParams]);
 
@@ -55,7 +46,6 @@ function PortfolioPreviewContent() {
       if (!user?.id) return;
       
       try {
-        // 🟢 Updated query to include 'slug' column
         const { data: resumes, error: fetchError } = await supabase
           .from("resumes")
           .select("id, parsed_json, file_url, slug, template_id, is_paid")
@@ -66,15 +56,17 @@ function PortfolioPreviewContent() {
         if (fetchError) throw fetchError;
 
         if (resumes && resumes.length > 0) {
-          console.log("✅ Portfolio Data Found:", resumes[0]);
-          setData(resumes[0].parsed_json);
-          setFileUrl(resumes[0].file_url);
+          const fetchedData = resumes[0].parsed_json || {};
+          // Ensure safe defaults
+          fetchedData.experience = fetchedData.experience || [];
+          fetchedData.projects = fetchedData.projects || [];
+          
+          setData(fetchedData);
           setResumeId(resumes[0].id);
-          setUserSlug(resumes[0].slug); // 🟢 Store slug locally
+          setUserSlug(resumes[0].slug);
           if (resumes[0].template_id) setCurrentTemplateId(resumes[0].template_id);
           setIsPaid(resumes[0].is_paid || false);
         } else {
-          console.warn("❌ No resumes found for user:", user.id);
           setErrorMsg("No portfolio data found. Please create one first.");
         }
       } catch (err) {
@@ -95,24 +87,25 @@ function PortfolioPreviewContent() {
     setIsSaving(true);
     const updatedData = { ...data, ...overrides };
 
-    // Optimistic Update
-    const { error } = await supabase
-      .from("resumes")
-      .update({ parsed_json: updatedData })
-      .eq("id", resumeId);
+    try {
+      const { error } = await supabase
+        .from("resumes")
+        .update({ parsed_json: updatedData })
+        .eq("id", resumeId);
 
-    setIsSaving(false);
+      if (error) throw error;
 
-    if (error) {
-      console.error("Save Error:", error);
+      setData(updatedData);
+      setOverrides({});
+      if (!silent) alert("Synced to Database!");
+      return true;
+    } catch (err) {
+      console.error("Save Error:", err);
       alert("Failed to save changes.");
       return false;
+    } finally {
+      setIsSaving(false);
     }
-
-    setData(updatedData);
-    setOverrides({});
-    if (!silent) alert("Synced to Database!");
-    return true;
   };
 
   const handleSave = () => saveToDb();
@@ -123,40 +116,37 @@ function PortfolioPreviewContent() {
       return;
     }
 
-    // 🟢 Auto-save if there are unsaved changes
     if (Object.keys(overrides).length > 0) {
-      const saved = await saveToDb(true); // Silent save
-      if (!saved) return; // Stop if save failed
+      const saved = await saveToDb(true);
+      if (!saved) return;
     }
 
     setIsDeploying(true);
     try {
-      // 🟢 Replace hardcoded URL with Environment Variable
-      const VERCEL_HOOK_URL = process.env.NEXT_PUBLIC_VERCEL_BUILD_HOOK;
-
-      // Note: Since the public page is force-dynamic, we technically don't need to rebuild
-      // for content updates, finding the data is enough. But we'll keep the hook
-      // if the user wants to ensure a fresh build or has other ISR paths.
-      // We will just warn if it's missing but verify the slug works.
+      const VERCEL_HOOK_URL = process.env.NEXT_PUBLIC_VERCEL_BUILD_HOOK || "";
 
       if (VERCEL_HOOK_URL) {
-        // Trigger build but don't wait for it continuously
-        fetch(VERCEL_HOOK_URL, { method: "POST" }).catch(e => console.error("Deploy hook error:", e));
+        try {
+          const res = await fetch(VERCEL_HOOK_URL, { method: "POST" });
+          if (!res.ok) console.warn(`Vercel hook warning: ${res.status}`);
+        } catch (hookError) {
+          console.error("Deploy hook fetch error:", hookError);
+        }
+      } else {
+        console.warn("Deploy hook missing, skipping automatic rebuild.");
       }
 
-      // Simulate a short delay so the user feels like "something happened"
-      // and to allow Supabase a split second to propagate if needed (usually instant)
-      await new Promise(r => setTimeout(r, 1500));
-
+      await new Promise(resolve => setTimeout(resolve, 1500));
       alert("Launch Successful! Taking you to your live site...");
-      // 🟢 Redirect to the public dynamic route: linklift.vercel.app/[slug]
-      // Use window.open to open in new tab so they don't lose the editor
-      window.open(`/${userSlug}`, '_blank');
-      setIsDeploying(false);
-
+      
+      if (typeof window !== "undefined") {
+        const absoluteUrl = `${window.location.origin}/${userSlug}`;
+        window.open(absoluteUrl, '_blank');
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Deploy Error:", err);
       alert("Deployment failed.");
+    } finally {
       setIsDeploying(false);
     }
   };
@@ -169,14 +159,13 @@ function PortfolioPreviewContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeId: resumeId })
       });
-      const data = await res.json();
+      const resData = await res.json();
       
-      if (!data.orderId) {
+      if (!resData.orderId) {
         alert("Failed to create order. Please try again.");
         return;
       }
 
-      // Load Razorpay Script
       const loadScript = (src: string) => {
         return new Promise((resolve) => {
           const script = document.createElement("script");
@@ -194,20 +183,23 @@ function PortfolioPreviewContent() {
       }
 
       const options = {
-        key: data.key,
-        amount: data.amount,
-        currency: data.currency,
+        key: resData.key,
+        amount: resData.amount,
+        currency: resData.currency,
         name: "LinkLift Portfolio",
         description: "Portfolio Deployment",
-        order_id: data.orderId,
-        handler: function (response: any) {
-             // Verify payment on success (Client side optimistic, verified by webhook)
+        order_id: resData.orderId,
+        handler: async function (response: any) {
+             // ⚠️ STRICT REQUIREMENT: BACKEND VERIFICATION
+             // In a robust production environment, the frontend success callback is vulnerable to spoofing.
+             // You MUST verify response.razorpay_signature against your backend before permanently granting access.
+             // Relying on webhooks is properly configured here as a best practice fallback.
              alert("Payment Successful! Deployment Unlocked.");
              setIsPaid(true);
         },
         prefill: {
-            name: data.name || "User",
-            email: data.email || "user@example.com",
+            name: resData.name || "User",
+            email: resData.email || "user@example.com",
             contact: ""
         },
         theme: {
@@ -219,7 +211,7 @@ function PortfolioPreviewContent() {
       paymentObject.open();
 
     } catch (err) {
-      console.error(err);
+      console.error("Payment setup error:", err);
       alert("Payment Error");
     }
   };
@@ -228,12 +220,10 @@ function PortfolioPreviewContent() {
   if (errorMsg) return <div className="min-h-screen bg-black text-red-400 flex flex-col items-center justify-center gap-4"><X size={48} className="text-red-500" /><p>{errorMsg}</p><button onClick={() => window.location.reload()} className="px-4 py-2 border border-red-500/50 rounded-lg hover:bg-red-500/10 transition">Try Again</button></div>;
   if (!data) return <div className="min-h-screen bg-black text-white flex items-center justify-center">No resume data found.</div>;
 
-  // 🟢 DYNAMIC TEMPLATE RENDERING
   const TemplateComponent = TEMPLATES[currentTemplateId]?.component || TEMPLATES.default.component;
 
   return (
     <div className="relative">
-      {/* Floating Toolbar */}
       <nav className="fixed top-6 right-6 z-[200] flex flex-col md:flex-row gap-3">
         <Link
           href="/portfolio/select-template"
@@ -242,7 +232,6 @@ function PortfolioPreviewContent() {
           <Layout size={14} className="group-hover:text-indigo-400 transition-colors" />
           Switch Design
         </Link>
-
         <button
           onClick={() => setCustomizeOpen(true)}
           className="px-5 py-2.5 bg-black/80 backdrop-blur-xl rounded-full text-white text-xs font-bold hover:bg-zinc-800 transition-all flex items-center gap-2 border border-white/10 shadow-2xl group"
@@ -250,7 +239,6 @@ function PortfolioPreviewContent() {
           <SlidersHorizontal size={14} className="group-hover:text-indigo-400 transition-colors" />
           Edit Content
         </button>
-
         {isPaid ? (
           <button
             onClick={handleDeploy}
@@ -271,12 +259,10 @@ function PortfolioPreviewContent() {
         )}
       </nav>
 
-      {/* The Actual Template */}
       <div className="w-full">
         <TemplateComponent data={data} />
       </div>
 
-      {/* RE-USABLE CMS SIDEBAR (Minimalist version) */}
       <AnimatePresence>
         {customizeOpen && (
           <>
@@ -294,33 +280,33 @@ function PortfolioPreviewContent() {
                 <div className="space-y-4">
                   <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-[0.2em]">Hero & Socials</h4>
                   <div className="space-y-4">
-                    <input value={gV('name', data.name)} onChange={(e) => updateField('name', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors" placeholder="Full Name" />
-                    <input value={gV('role', data.role)} onChange={(e) => updateField('role', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors" placeholder="Headline / Role" />
+                    <input value={gV('name', data.name) || ''} onChange={(e) => updateField('name', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors" placeholder="Full Name" />
+                    <input value={gV('role', data.role) || ''} onChange={(e) => updateField('role', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors" placeholder="Headline / Role" />
                     <div className="grid grid-cols-2 gap-3">
-                      <input value={gV('github', data.github)} onChange={(e) => updateField('github', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-xs outline-none focus:border-indigo-500/50 transition-colors" placeholder="GitHub URL" />
-                      <input value={gV('linkedin', data.linkedin)} onChange={(e) => updateField('linkedin', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-xs outline-none focus:border-indigo-500/50 transition-colors" placeholder="LinkedIn URL" />
+                      <input value={gV('github', data.github) || ''} onChange={(e) => updateField('github', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-xs outline-none focus:border-indigo-500/50 transition-colors" placeholder="GitHub URL" />
+                      <input value={gV('linkedin', data.linkedin) || ''} onChange={(e) => updateField('linkedin', e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-xs outline-none focus:border-indigo-500/50 transition-colors" placeholder="LinkedIn URL" />
                     </div>
-                    <textarea value={gV('bio', data.bio)} onChange={(e) => updateField('bio', e.target.value)} rows={4} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors resize-none" placeholder="Elevator Pitch" />
+                    <textarea value={gV('bio', data.bio) || ''} onChange={(e) => updateField('bio', e.target.value)} rows={4} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white text-sm outline-none focus:border-indigo-500/50 transition-colors resize-none" placeholder="Elevator Pitch" />
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-[0.2em]">Career Timeline</h4>
-                  {gV('experience', data.experience)?.slice(0, 3).map((exp: any, i: number) => (
+                  {(gV('experience', data.experience) || []).slice(0, 3).map((exp: any, i: number) => (
                     <div key={i} className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                      <input value={exp.company} onChange={(e) => { const n = [...gV('experience', data.experience)]; n[i].company = e.target.value; updateField('experience', n); }} className="w-full bg-transparent border-b border-white/10 text-white font-bold text-sm" />
-                      <textarea value={exp.description} onChange={(e) => { const n = [...gV('experience', data.experience)]; n[i].description = e.target.value; updateField('experience', n); }} rows={2} className="w-full bg-transparent text-xs text-zinc-500 resize-none" />
+                      <input value={exp?.company || ''} onChange={(e) => { const n = [...(gV('experience', data.experience) || [])]; if(n[i]) { n[i].company = e.target.value; updateField('experience', n); } }} className="w-full bg-transparent border-b border-white/10 text-white font-bold text-sm" />
+                      <textarea value={exp?.description || ''} onChange={(e) => { const n = [...(gV('experience', data.experience) || [])]; if(n[i]) { n[i].description = e.target.value; updateField('experience', n); } }} rows={2} className="w-full bg-transparent text-xs text-zinc-500 resize-none" />
                     </div>
                   ))}
                 </div>
 
                 <div className="space-y-4">
                   <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-[0.2em]">Projects</h4>
-                  {(gV('projects', data.projects) || [])?.slice(0, 3).map((proj: any, i: number) => (
+                  {(gV('projects', data.projects) || []).slice(0, 3).map((proj: any, i: number) => (
                     <div key={i} className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                      <input value={proj.title} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; n[i].title = e.target.value; updateField('projects', n); }} className="w-full bg-transparent border-b border-white/10 text-white font-bold text-sm" placeholder="Project Title" />
-                      <input value={proj.link} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; n[i].link = e.target.value; updateField('projects', n); }} className="w-full bg-transparent border-b border-white/10 text-indigo-400 text-xs" placeholder="Live Link (https://...)" />
-                      <textarea value={proj.description} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; n[i].description = e.target.value; updateField('projects', n); }} rows={2} className="w-full bg-transparent text-xs text-zinc-500 resize-none" placeholder="Project Description" />
+                      <input value={proj?.title || ''} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; if(n[i]) { n[i].title = e.target.value; updateField('projects', n); } }} className="w-full bg-transparent border-b border-white/10 text-white font-bold text-sm" placeholder="Project Title" />
+                      <input value={proj?.link || ''} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; if(n[i]) { n[i].link = e.target.value; updateField('projects', n); } }} className="w-full bg-transparent border-b border-white/10 text-indigo-400 text-xs" placeholder="Live Link (https://...)" />
+                      <textarea value={proj?.description || ''} onChange={(e) => { const n = [...(gV('projects', data.projects) || [])]; if(n[i]) { n[i].description = e.target.value; updateField('projects', n); } }} rows={2} className="w-full bg-transparent text-xs text-zinc-500 resize-none" placeholder="Project Description" />
                     </div>
                   ))}
                   {(!gV('projects', data.projects) || gV('projects', data.projects).length === 0) && (
