@@ -24,7 +24,7 @@ If you want to run this locally on your own machine, it's pretty straightforward
    npm run dev
    ```
 
-3. Head over to [http://localhost:3000](http://localhost:3000) to see it in action.
+3. Head over to [http://localhost:3000](https://link-lift-gamma.vercel.app/) to see it in action.
 
 ### 📂 Quick Tour
 - Feel free to poke around the `app/` directory to see how the Next.js routing is set up.
